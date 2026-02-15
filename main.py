@@ -11,33 +11,114 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, skip_pending=True)
 
 SENSITIVE_WORDS = ['جنس', 'سكس', 'إباحي', 'xxx']
 
-# مجلد تخزين ملفات JSON
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ---------------------------------------------------------
-# دالة حفظ بيانات المستخدم في JSON
+# JSON Memory System
 # ---------------------------------------------------------
 
 def save_user_data(chat_id, data):
     file_path = f"{DATA_DIR}/{chat_id}.json"
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print(f"[Saved] تم تحديث ملف JSON للمستخدم {chat_id}")
+    print(f"[Saved] تحديث ملف JSON للمستخدم {chat_id}")
 
 def load_user_data(chat_id):
     file_path = f"{DATA_DIR}/{chat_id}.json"
+
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {
-        "custom_prompt": None,
-        "keywords": [],
-        "history": []
-    }
+            data = json.load(f)
+    else:
+        data = {}
+
+    # إصلاح تلقائي للحقول الناقصة
+    data.setdefault("custom_prompt", None)
+    data.setdefault("keywords", [])
+    data.setdefault("history", [])
+    data.setdefault("analysis_memory", [])
+    data.setdefault("paths", [])
+    data.setdefault("best_path", None)
+
+    # تحليل الشخصية
+    data.setdefault("personality_profile", {
+        "traits": [],
+        "communication_style": "",
+        "interests": [],
+        "strengths": [],
+        "weaknesses": []
+    })
+
+    return data
 
 # ---------------------------------------------------------
-# دالة محسّنة لإرسال الطلب إلى Ollama
+# Personality Analysis
+# ---------------------------------------------------------
+
+def analyze_personality(text, data):
+    traits = []
+    strengths = []
+    weaknesses = []
+    interests = []
+    style = data["personality_profile"].get("communication_style", "")
+
+    # تحليل السمات
+    if any(w in text for w in ["أفكر", "أشعر", "أحس", "أتوتر"]):
+        traits.append("حساس")
+        weaknesses.append("يميل للقلق")
+        strengths.append("وعي ذاتي جيد")
+
+    if any(w in text for w in ["أريد", "أخطط", "أقرر"]):
+        traits.append("عملي")
+        strengths.append("يميل للوضوح")
+
+    # الاهتمامات
+    if any(w in text for w in ["زواج", "علاقة", "خطوبة"]):
+        interests.append("العلاقات")
+
+    if any(w in text for w in ["عمل", "وظيفة", "راتب"]):
+        interests.append("العمل")
+
+    # أسلوب التواصل
+    if "شرح" in text or "طويل" in text:
+        style = "يحب التفاصيل"
+    else:
+        style = "يفضل الاختصار"
+
+    # دمج النتائج
+    data["personality_profile"]["traits"] = list(set(data["personality_profile"]["traits"] + traits))
+    data["personality_profile"]["strengths"] = list(set(data["personality_profile"]["strengths"] + strengths))
+    data["personality_profile"]["weaknesses"] = list(set(data["personality_profile"]["weaknesses"] + weaknesses))
+    data["personality_profile"]["interests"] = list(set(data["personality_profile"]["interests"] + interests))
+    data["personality_profile"]["communication_style"] = style
+
+    print(f"[Personality] تحديث تحليل الشخصية: {data['personality_profile']}")
+    return data
+
+# ---------------------------------------------------------
+# A* Inspired Path Builder
+# ---------------------------------------------------------
+
+def build_path(keywords, history):
+    if not keywords:
+        return None
+
+    path = {
+        "nodes": keywords[-5:],
+        "context": history[-1] if history else "",
+        "score": len(keywords[-5:])
+    }
+
+    return path
+
+def choose_best_path(paths):
+    if not paths:
+        return None
+    return sorted(paths, key=lambda p: p["score"], reverse=True)[0]
+
+# ---------------------------------------------------------
+# Ollama Request
 # ---------------------------------------------------------
 
 def ask_ollama(messages, model="qwen2.5:1.5b", retries=3, timeout=45):
@@ -46,104 +127,29 @@ def ask_ollama(messages, model="qwen2.5:1.5b", retries=3, timeout=45):
         "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.6,
-            "num_predict": 600,
-            "top_p": 0.95
+            "temperature": 0.5,
+            "num_predict": 500,
+            "top_p": 0.9
         }
     }
 
     for attempt in range(retries):
         try:
-            print(f"[Thinking] محاولة {attempt+1} لإرسال الطلب إلى Ollama...")
-            response = requests.post(
-                OLLAMA_URL,
-                json=payload,
-                timeout=timeout
-            )
+            print(f"[Thinking] محاولة {attempt+1} لإرسال الطلب...")
+            response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
 
             if response.status_code == 200:
-                print("[Success] Ollama ردّ بنجاح")
+                print("[Success] ردّ Ollama")
                 return response.json()["message"]["content"].strip()
 
-            if response.status_code >= 500:
-                print("[Retry] خطأ من السيرفر… إعادة المحاولة")
-                continue
-
         except Exception as e:
-            print(f"[Error] {e} — إعادة المحاولة")
+            print(f"[Error] {e}")
 
-    print("[Fail] فشل الاتصال بـ Ollama بعد كل المحاولات")
+    print("[Fail] فشل الاتصال بـ Ollama")
     return None
 
-
 # ---------------------------------------------------------
-# أوامر البوت
-# ---------------------------------------------------------
-
-@bot.message_handler(commands=['start'])
-def start_message(message):
-    chat_id = message.chat.id
-    data = load_user_data(chat_id)
-    save_user_data(chat_id, data)
-
-    bot.reply_to(message, """
-🤖 **معينك الشخصي AI | مساعد شامل**
-
-✨ أسلوبي الجديد:
-• أناقشك قبل ما أعطي حلول  
-• أرتّب الصورة وأوضح الأبعاد  
-• أحفظ كلامك كمفاتيح نقاش  
-• أبني على إجاباتك السابقة  
-• وفي النهاية أعطيك ملخص شامل للحلول  
-
-**الأوامر:**
-`/prompt` - تخصيص السلوك  
-`/reset` - إعادة التهيئة  
-`/status` - حالة البوت
-    """, parse_mode='Markdown')
-
-
-@bot.message_handler(commands=['reset'])
-def reset_context(message):
-    chat_id = message.chat.id
-    data = {
-        "custom_prompt": None,
-        "keywords": [],
-        "history": []
-    }
-    save_user_data(chat_id, data)
-    bot.reply_to(message, "🔄 **تمت إعادة التهيئة بالكامل!**")
-
-
-@bot.message_handler(commands=['status'])
-def show_status(message):
-    chat_id = message.chat.id
-    data = load_user_data(chat_id)
-
-    prompt_status = "مخصص" if data.get('custom_prompt') else "افتراضي"
-    keywords = ", ".join(data.get('keywords', [])) or "لا يوجد بعد"
-
-    bot.reply_to(message, f"""
-📊 **حالة البوت:**
-• الـ Prompt: {prompt_status}
-• الكلمات المفتاحية: {keywords}
-• النموذج: qwen2.5:1.5b
-    """, parse_mode='Markdown')
-
-
-@bot.message_handler(commands=['prompt'])
-def set_prompt(message):
-    chat_id = message.chat.id
-    msg = bot.reply_to(message, "✍️ **اكتب الـ prompt الجديد:**", parse_mode='Markdown')
-
-    data = load_user_data(chat_id)
-    data['waiting_prompt'] = True
-    data['prompt_message_id'] = msg.message_id
-    save_user_data(chat_id, data)
-
-
-# ---------------------------------------------------------
-# معالجة الرسائل
+# Main Handler
 # ---------------------------------------------------------
 
 @bot.message_handler(func=lambda message: True)
@@ -153,74 +159,73 @@ def handle_message(message):
 
     data = load_user_data(chat_id)
 
-    # استقبال prompt جديد
-    if data.get('waiting_prompt'):
-        data['custom_prompt'] = text
-        data['waiting_prompt'] = False
-
-        bot.edit_message_text(
-            f"✅ **تم حفظ الـ Prompt الجديد!**\n\n📝 *{text[:100]}...*",
-            chat_id,
-            data['prompt_message_id'],
-            parse_mode='Markdown'
-        )
-
-        save_user_data(chat_id, data)
-        return
-
-    # فلترة المحتوى الحساس
+    # Sensitive filter
     if any(word in text.lower() for word in SENSITIVE_WORDS):
         bot.reply_to(message, "🚫 **الموضوع غير مسموح**")
         return
 
-    # استخراج كلمات مفتاحية جديدة
+    # تحليل الشخصية
+    data = analyze_personality(text, data)
+
+    # استخراج كلمات مفتاحية
     extracted = re.findall(r'\b\w+\b', text)
     extracted = [w for w in extracted if len(w) > 3]
 
     if extracted:
-        print(f"[Learning] كلمات مفتاحية جديدة: {extracted}")
+        print(f"[Keywords] كلمات جديدة: {extracted}")
         data['keywords'].extend(extracted)
 
     # حفظ آخر 5 رسائل
     data['history'].append(text)
     data['history'] = data['history'][-5:]
 
+    # بناء مسار جديد
+    new_path = build_path(data['keywords'], data['history'])
+    if new_path:
+        data['paths'].append(new_path)
+        print(f"[Path] مسار جديد: {new_path}")
+
+    # اختيار أفضل مسار
+    data['best_path'] = choose_best_path(data['paths'])
+    print(f"[Best Path] {data['best_path']}")
+
     save_user_data(chat_id, data)
 
     # رسالة "يفكر"
-    loading_msg = bot.reply_to(message, "🧠 **يفكر معك...** ⏳")
-    print(f"[Thinking] المستخدم قال: {text}")
+    loading_msg = bot.reply_to(message, "🧠 **يفكر بسرعة...** ⏳")
 
     # ---------------------------------------------------------
-    # الـ Prompt الجديد (نظام النقاش)
+    # Build Prompt
     # ---------------------------------------------------------
 
-    base_prompt = data.get('custom_prompt')
+    base_prompt = f"""
+أنت معين شخصي سريع التحليل.
 
-    if not base_prompt:
-        base_prompt = f"""
-أنت معين شخصي يعتمد على الحوار العميق وليس الإجابات المباشرة.
+تحليل شخصية المستخدم:
+السمات: {data['personality_profile']['traits']}
+نقاط القوة: {data['personality_profile']['strengths']}
+نقاط الضعف: {data['personality_profile']['weaknesses']}
+الاهتمامات: {data['personality_profile']['interests']}
+أسلوب التواصل المفضل: {data['personality_profile']['communication_style']}
 
-دورك:
-1) تبدأ دائمًا بتحليل كلام المستخدم وترتيب الصورة.
-2) تناقشه وتفتح له زوايا جديدة.
-3) تربط بين كلامه الحالي وكلامه السابق.
-4) تستخدم الكلمات المفتاحية التالية كمفاتيح نقاش:
+أفضل مسار (Best Path):
+{data['best_path']}
+
+الكلمات المفتاحية:
 {', '.join(data['keywords'])}
-5) بعد النقاش، تقدّم ملخصًا شاملًا للحلول الممكنة.
 
-آخر ما قاله المستخدم:
+آخر الرسائل:
 {data['history']}
 
-صيغة الرد:
-🧠 **نقاش أوّلي:** تحليل وتوسيع الفكرة  
-💬 **تعمّق:** ربط بين النقاط السابقة  
-📌 **ملخص الحلول:** نقاط واضحة  
-❓ **سؤال جوهري:** سؤال واحد يساعد المستخدم يتقدم
+دورك:
+- تحليل سريع
+- سؤال واحد فقط إن لزم
+- ثم تقديم الحل مباشرة
+- بدون نقاش طويل
 """
 
     # ---------------------------------------------------------
-    # إرسال الطلب إلى Ollama
+    # Send to Ollama
     # ---------------------------------------------------------
 
     ai_reply = ask_ollama(
@@ -231,26 +236,15 @@ def handle_message(message):
     )
 
     if not ai_reply:
-        bot.edit_message_text(
-            "❌ **تعذّر الاتصال بـ Ollama بعد عدة محاولات**",
-            chat_id,
-            loading_msg.message_id,
-            parse_mode='Markdown'
-        )
+        bot.edit_message_text("❌ **تعذّر الاتصال بـ Ollama**", chat_id, loading_msg.message_id)
         return
 
-    bot.edit_message_text(
-        f"🤖 **معينك الشخصي:**\n\n{ai_reply}",
-        chat_id,
-        loading_msg.message_id,
-        parse_mode='Markdown'
-    )
-
+    bot.edit_message_text(f"🤖 **معينك الشخصي:**\n\n{ai_reply}", chat_id, loading_msg.message_id)
 
 # ---------------------------------------------------------
-# تشغيل البوت
+# Run Bot
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
-    print("🚀 معينك الشخصي AI جاهز!")
+    print("🚀 البوت جاهز!")
     bot.infinity_polling(skip_pending=True)
