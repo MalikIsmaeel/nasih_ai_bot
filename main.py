@@ -2,157 +2,152 @@ import telebot
 import requests
 import json
 from datetime import datetime
-import re
 
 TELEGRAM_TOKEN = "8563422388:AAGNMKKbmoR-JvgFxj6SNhVHW1HA80PFcjA"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# كلمات حساسة
 SENSITIVE_WORDS = ['جنس', 'سكس', 'إباحي', 'xxx']
+
+# ذاكرة المستخدم
 user_context = {}
 
-@bot.message_handler(commands=['/start'])
+# ============================
+# 1) رسالة البداية
+# ============================
+@bot.message_handler(commands=['start'])
 def start_message(message):
-    user_context[message.chat.id] = {'goal': None, 'custom_prompt': None}
+    user_context[message.chat.id] = {'custom_prompt': None}
     bot.reply_to(message, """
-🤖 **ناصِح AI | بوت ذكي مخصص**  
+🤖 **ناصِح AI | مساعد ذكي**
 
-✅ **المميزات:**
-• **أنت** تتحكم في الـ Prompt  
-• سرعة 3-5 ثواني  
-• خصوصية 100% localhost  
+✨ *مميزات النسخة الذكية:*
+• تحكم كامل في الـ Prompt  
+• ردود أسرع وأكثر دقة  
+• فلترة ذكية للمحتوى  
+• خصوصية 100% (Localhost)
 
 **الأوامر:**
-`/prompt` - ضبط الـ prompt الخاص بيك  
-`/reset` - ريستارت  
-`/status` - حالة البوت  
+`/prompt` — ضبط الـ Prompt  
+`/reset` — إعادة التهيئة  
+`/status` — حالة البوت
 
-اختبرني: `عاوز جهاز عرس بـ 15 ألف`
+جرّب: *عاوز جهاز عرس بـ 15 ألف*
     """, parse_mode='Markdown')
 
+# ============================
+# 2) ضبط الـ Prompt
+# ============================
 @bot.message_handler(commands=['prompt'])
 def set_prompt(message):
     chat_id = message.chat.id
-    msg = bot.reply_to(message, "✍️ **اكتب الـ prompt الجديد:**\n\n*ملاحظة: هيشتغل مع الشروط الإجبارية*", parse_mode='Markdown')
-    
+    bot.reply_to(message, "✍️ **اكتب الـ Prompt الجديد:**", parse_mode='Markdown')
     user_context[chat_id]['waiting_prompt'] = True
-    user_context[chat_id]['prompt_message_id'] = msg.message_id
 
+# ============================
+# 3) إعادة التهيئة
+# ============================
 @bot.message_handler(commands=['reset'])
 def reset_context(message):
     chat_id = message.chat.id
-    user_context[chat_id] = {'goal': None, 'custom_prompt': None}
-    bot.reply_to(message, "🔄 **تم الريستارت!** جاهز لمحادثة جديدة 🚀")
+    user_context[chat_id] = {'custom_prompt': None}
+    bot.reply_to(message, "🔄 **تمت إعادة التهيئة!**")
 
+# ============================
+# 4) حالة البوت
+# ============================
 @bot.message_handler(commands=['status'])
 def show_status(message):
     chat_id = message.chat.id
-    context = user_context.get(chat_id, {})
-    prompt_status = "✅ مخصص" if context.get('custom_prompt') else "📋 افتراضي"
-    
+    prompt_status = "مخصص" if user_context.get(chat_id, {}).get('custom_prompt') else "افتراضي"
     bot.reply_to(message, f"""
 📊 **حالة البوت:**
-• Prompt: {prompt_status}
-• نموذج: llama3.2:1b
-
-💡 غيّر الـ prompt بـ `/prompt`
+• الـ Prompt: {prompt_status}
+• النموذج: llama3.2:1b
     """, parse_mode='Markdown')
 
+# ============================
+# 5) المعالجة الأساسية
+# ============================
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
     text = message.text.strip()
-    
-    # التحقق من انتظار الـ prompt
-    if chat_id in user_context and user_context[chat_id].get('waiting_prompt'):
-        custom_prompt = text
-        user_context[chat_id]['custom_prompt'] = custom_prompt
+
+    # استقبال الـ Prompt الجديد
+    if user_context.get(chat_id, {}).get('waiting_prompt'):
+        user_context[chat_id]['custom_prompt'] = text
         user_context[chat_id]['waiting_prompt'] = False
-        
-        bot.edit_message_text(
-            f"✅ **تم حفظ الـ Prompt الجديد!**\n\n📝 *{custom_prompt[:100]}...*\n\nجاهز للاستخدام 🚀", 
-            chat_id, 
-            user_context[chat_id]['prompt_message_id'],
-            parse_mode='Markdown'
-        )
+        bot.reply_to(message, "✅ **تم حفظ الـ Prompt الجديد!**")
         return
-    
+
     # فلترة المحتوى الحساس
-    if any(word in text.lower() for word in SENSITIVE_WORDS):
-        bot.reply_to(message, "🔒 **الموضوع يحتاج متخصص معتمد** 📞\n\n💡 جرب: `/prompt` لتخصيص")
+    if any(word in text for word in SENSITIVE_WORDS):
+        bot.reply_to(message, "🚫 **الموضوع غير مسموح**")
         return
-    
-    # رسالة التحميل
-    loading_msg = bot.reply_to(message, "🧠 **ناصِح بيحلل...** ⏳")
-    
-    # إعداد السياق
-    if chat_id not in user_context:
-        user_context[chat_id] = {}
-    
-    # الـ Prompt النهائي (مخصص أو افتراضي)
-    base_prompt = user_context[chat_id].get('custom_prompt')
-    
+
+    # رسالة تحميل
+    loading = bot.reply_to(message, "🧠 **جاري التحليل...**")
+
+    # الـ Prompt الأساسي
+    base_prompt = user_context.get(chat_id, {}).get('custom_prompt')
     if not base_prompt:
         base_prompt = """
-أنت ناصح مالي سعودي 🤝. رد دائماً بهيكل ثابت:
+أنت ناصح مالي سعودي. رد دائمًا بهذا الشكل:
 
 🧠 **ناصِح | [الموضوع]**
-✅ **فهمتك:** [تلخيص]
-💰 **أقل سعر:** [المبلغ]
+✅ **فهمتك:** [ملخص]
+💰 **أقل سعر:** [رقم]
 💡 **خطة (3 خطوات):**
-1️⃣ [خطوة 1]
-2️⃣ [خطوة 2] 
-3️⃣ [خطوة 3]
-❓ **سؤالي:** [سؤال واحد]
+1️⃣ خطوة  
+2️⃣ خطوة  
+3️⃣ خطوة  
+❓ **سؤالي:** سؤال واحد
 
-**شروط إجبارية:**
-- رد قصير (6 خطوط)
-- أرقام + إيموجي فقط
-- حلول سعودية واقعية 2026
+شروط:
+- الرد 6 أسطر فقط
+- أرقام + إيموجي
+- حلول سعودية 2026
         """
-    
-    # **التغيير الأساسي: إرسال السؤال مباشرة بدون تاريخ المحادثة**
-    final_prompt = f"{base_prompt}\n\n**سؤال المستخدم:** {text}"
-    
-    # طلب Ollama - السؤال مباشرة
+
+    # إعداد الطلب
     payload = {
         "model": "llama3.2:1b",
         "messages": [
             {"role": "system", "content": base_prompt},
-            {"role": "user", "content": text}  # السؤال فقط!
+            {"role": "user", "content": text}
         ],
         "stream": False,
         "options": {
-            "temperature": 0.3,
-            "num_predict": 250,
-            "top_p": 0.9
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "num_predict": 200
         }
     }
-    
+
+    # إرسال الطلب
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=30)
-        response.raise_for_status()
-        
+        response = requests.post(OLLAMA_URL, json=payload, timeout=25)
         ai_reply = response.json()['message']['content'].strip()
-        final_reply = f"🤖 **ناصِح AI:**\n\n{ai_reply}"
-        
+
         bot.edit_message_text(
-            final_reply, 
-            chat_id, 
-            loading_msg.message_id,
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        bot.edit_message_text(
-            "❌ **خطأ:**\n• `ollama serve` شغال؟\n• `ollama pull llama3.2:1b`؟\n\n`/start` للريستارت", 
-            chat_id, 
-            loading_msg.message_id,
+            f"🤖 **ناصِح AI:**\n\n{ai_reply}",
+            chat_id,
+            loading.message_id,
             parse_mode='Markdown'
         )
 
+    except Exception:
+        bot.edit_message_text(
+            "❌ **خطأ في الاتصال بـ Ollama**\nتأكد أن السيرفر شغال.",
+            chat_id,
+            loading.message_id
+        )
+
+# ============================
+# تشغيل البوت
+# ============================
 if __name__ == "__main__":
-    print("🚀 ناصِح AI Bot | السؤال مباشرة للـ AI!")
-    print("✅ Terminal 1: ollama serve")
-    print("✅ Terminal 2: python bot.py")
+    print("🚀 ناصِح AI جاهز!")
     bot.infinity_polling()
