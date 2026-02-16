@@ -3,6 +3,7 @@ import requests
 import re
 import json
 import os
+from datetime import datetime
 
 TELEGRAM_TOKEN = "8563422388:AAGNMKKbmoR-JvgFxj6SNhVHW1HA80PFcjA"
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -12,7 +13,18 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, skip_pending=True)
 SENSITIVE_WORDS = ['جنس', 'سكس', 'إباحي', 'xxx']
 
 DATA_DIR = "data"
+LOG_FILE = "bot_logs.txt"
+
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# ---------------------------------------------------------
+# Logging to TXT
+# ---------------------------------------------------------
+
+def log_event(text):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {text}\n")
 
 # ---------------------------------------------------------
 # JSON Memory System
@@ -22,7 +34,7 @@ def save_user_data(chat_id, data):
     file_path = f"{DATA_DIR}/{chat_id}.json"
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print(f"[Saved] تحديث ملف JSON للمستخدم {chat_id}")
+    log_event(f"تم تحديث ملف JSON للمستخدم {chat_id}")
 
 def load_user_data(chat_id):
     file_path = f"{DATA_DIR}/{chat_id}.json"
@@ -41,7 +53,6 @@ def load_user_data(chat_id):
     data.setdefault("paths", [])
     data.setdefault("best_path", None)
 
-    # تحليل الشخصية
     data.setdefault("personality_profile", {
         "traits": [],
         "communication_style": "",
@@ -93,7 +104,7 @@ def analyze_personality(text, data):
     data["personality_profile"]["interests"] = list(set(data["personality_profile"]["interests"] + interests))
     data["personality_profile"]["communication_style"] = style
 
-    print(f"[Personality] تحديث تحليل الشخصية: {data['personality_profile']}")
+    log_event(f"تحليل شخصية جديد للمستخدم {traits}, {strengths}, {weaknesses}, {interests}")
     return data
 
 # ---------------------------------------------------------
@@ -107,7 +118,8 @@ def build_path(keywords, history):
     path = {
         "nodes": keywords[-5:],
         "context": history[-1] if history else "",
-        "score": len(keywords[-5:])
+        "score": len(keywords[-5:]),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
     return path
@@ -135,17 +147,17 @@ def ask_ollama(messages, model="qwen2.5:1.5b", retries=3, timeout=45):
 
     for attempt in range(retries):
         try:
-            print(f"[Thinking] محاولة {attempt+1} لإرسال الطلب...")
+            log_event(f"محاولة {attempt+1} لإرسال الطلب إلى Ollama")
             response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
 
             if response.status_code == 200:
-                print("[Success] ردّ Ollama")
+                log_event("Ollama ردّ بنجاح")
                 return response.json()["message"]["content"].strip()
 
         except Exception as e:
-            print(f"[Error] {e}")
+            log_event(f"خطأ أثناء الاتصال بـ Ollama: {e}")
 
-    print("[Fail] فشل الاتصال بـ Ollama")
+    log_event("فشل الاتصال بـ Ollama بعد كل المحاولات")
     return None
 
 # ---------------------------------------------------------
@@ -164,6 +176,8 @@ def handle_message(message):
         bot.reply_to(message, "🚫 **الموضوع غير مسموح**")
         return
 
+    log_event(f"رسالة جديدة من المستخدم {chat_id}: {text}")
+
     # تحليل الشخصية
     data = analyze_personality(text, data)
 
@@ -172,7 +186,7 @@ def handle_message(message):
     extracted = [w for w in extracted if len(w) > 3]
 
     if extracted:
-        print(f"[Keywords] كلمات جديدة: {extracted}")
+        log_event(f"كلمات مفتاحية جديدة: {extracted}")
         data['keywords'].extend(extracted)
 
     # حفظ آخر 5 رسائل
@@ -183,11 +197,11 @@ def handle_message(message):
     new_path = build_path(data['keywords'], data['history'])
     if new_path:
         data['paths'].append(new_path)
-        print(f"[Path] مسار جديد: {new_path}")
+        log_event(f"مسار جديد: {new_path}")
 
     # اختيار أفضل مسار
     data['best_path'] = choose_best_path(data['paths'])
-    print(f"[Best Path] {data['best_path']}")
+    log_event(f"أفضل مسار: {data['best_path']}")
 
     save_user_data(chat_id, data)
 
@@ -246,5 +260,5 @@ def handle_message(message):
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
-    print("🚀 البوت جاهز!")
+    log_event("🚀 تشغيل البوت")
     bot.infinity_polling(skip_pending=True)
